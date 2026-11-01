@@ -1,0 +1,14 @@
+lipenv/
+lipenv312/
+__pycache__/
+data/
+synthetic/
+out/
+*.pt
+*.npy
+train.log
+# personal photos / video
+face.jpg
+mesh.jpg
+booth.*
+frames_*.jpg

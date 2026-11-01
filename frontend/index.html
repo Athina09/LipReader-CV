@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lip Reader</title>
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --ink:#1d1d1f; --mute:#6e6e73; --accent:#2f6fed; --line:#e3e1dc; --bar:#dfe8fd; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#15161a; --card:#1f2026; --ink:#f2f2f4; --mute:#9a9aa3; --accent:#6c9bff; --line:#32333b; --bar:#27304a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui, sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { font-size:28px; margin:0 0 4px; }
+  p.sub { color:var(--mute); margin:0 0 24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; margin-bottom:16px; }
+  video { width:100%; border-radius:10px; background:#000; aspect-ratio:4/3; object-fit:cover; transform:scaleX(-1); }
+  video.playback { transform:none; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; align-items:center; }
+  button, label.btn { font:inherit; padding:10px 16px; border-radius:10px; border:1px solid var(--line);
+    background:var(--card); color:var(--ink); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  input[type=file] { display:none; }
+  .status { color:var(--mute); font-size:14px; }
+  .bar { position:relative; height:34px; border-radius:8px; background:var(--bar); margin:6px 0; overflow:hidden; }
+  .bar > i { position:absolute; inset:0 auto 0 0; background:var(--accent); opacity:.85; }
+  .bar span { position:relative; display:flex; justify-content:space-between; padding:0 12px; line-height:34px; font-weight:500; }
+  #strip { width:100%; image-rendering:pixelated; border-radius:8px; margin-top:8px; }
+  .err { color:#c0392b; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Lip Reader</h1>
+  <p class="sub">Record yourself silently saying one word (about 2 seconds), or upload a clip.</p>
+
+  <section class="card">
+    <video id="cam" autoplay muted playsinline></video>
+    <div class="row">
+      <button id="start" class="primary">Start camera</button>
+      <button id="rec" disabled>Record 2 s</button>
+      <label class="btn">Upload clip<input id="file" type="file" accept="video/*"></label>
+      <span id="status" class="status"></span>
+    </div>
+  </section>
+
+  <section id="result" class="card" hidden>
+    <h2 style="margin:0 0 8px;font-size:18px">Prediction</h2>
+    <div id="bars"></div>
+    <p class="status" style="margin:14px 0 4px">What the model saw (mouth crops across the clip)</p>
+    <img id="strip" alt="Mouth crops">
+    <p id="meta" class="status"></p>
+  </section>
+</main>
+
+<script>
+const cam = document.getElementById('cam');
+const startBtn = document.getElementById('start');
+const recBtn = document.getElementById('rec');
+const fileIn = document.getElementById('file');
+const statusEl = document.getElementById('status');
+let stream = null;
+
+function setStatus(msg, isErr) {
+  statusEl.textContent = msg;
+  statusEl.className = 'status' + (isErr ? ' err' : '');
+}
+
+startBtn.onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+    cam.srcObject = stream;
+    recBtn.disabled = false;
+    startBtn.disabled = true;
+    setStatus('Camera on. Face the camera, then press Record.');
+  } catch (e) {
+    setStatus('Could not open the camera: ' + e.message, true);
+  }
+};
+
+recBtn.onclick = () => {
+  const chunks = [];
+  const rec = new MediaRecorder(stream);
+  rec.ondataavailable = e => chunks.push(e.data);
+  rec.onstop = () => send(new Blob(chunks, { type: rec.mimeType }), 'clip.webm');
+  recBtn.disabled = true;
+  setStatus('Recording... say the word silently');
+  rec.start();
+  setTimeout(() => rec.stop(), 2000);
+};
+
+fileIn.onchange = () => {
+  if (fileIn.files[0]) send(fileIn.files[0], fileIn.files[0].name);
+};
+
+async function send(blob, name) {
+  setStatus('Reading lips...');
+  const form = new FormData();
+  form.append('video', blob, name);
+  try {
+    const res = await fetch('/predict', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'request failed');
+    show(data);
+    setStatus('Done.');
+  } catch (e) {
+    setStatus(e.message, true);
+  }
+  recBtn.disabled = !stream;
+}
+
+function show(d) {
+  const bars = document.getElementById('bars');
+  bars.innerHTML = '';
+  d.predictions.slice(0, 5).forEach((p, i) => {
+    const el = document.createElement('div');
+    el.className = 'bar' + (i === 0 ? ' top' : '');
+    const pct = (p.prob * 100).toFixed(1);
+    el.innerHTML = `<i style="width:${pct}%"></i><span><b>${p.label}</b><b>${pct}%</b></span>`;
+    bars.appendChild(el);
+  });
+  document.getElementById('strip').src = d.mouth_strip;
+  document.getElementById('meta').textContent =
+    `Face found in ${d.face_frames} of ${d.total_frames} frames.`;
+  document.getElementById('result').hidden = false;
+}
+</script>
+</body>
+</html>
